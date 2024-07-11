@@ -2,48 +2,76 @@ import express from 'express';
 import Classifier from 'ml-classify-text';
 
 const router = express.Router();
+
+// Create a new classifier with more advanced configuration
 const classifier = new Classifier({
-    nGramMin: 2,
-    nGramMax: 2,  // Используем биграммы
+    nGramMin: 1,
+    nGramMax: 3,  // Use unigrams, bigrams, and trigrams
+    vocabulary: [],  // Use an empty array instead of an empty Set
 });
 
-// Обучение модели на примере "хорошего кандидата"
-const positiveData = [
-    "React","TypeScript","Работал","хочу помогать Казахстану","имеется мотивация","не знаю чем занятса"
-];
+const positiveData = [    "React","Vue","Я хочу стать сильнее,","хочу помогать стране, знаю фронт"];
 
-const negativeData = [
-    'Такой кандидат с плохой мотивацией, коротко пишет, нет ссылки на GitHub и т.д.',
-    'Не имеет опыта работы с современными технологиями',
-    'Имеет плохую репутацию в профессиональном сообществе',
-    'Не прошел стажировку в крупной IT-компании',
-    // Дополнительные отрицательные примеры
-    'Игнорирует использование систем контроля версий (Git)',
-    'Не обновляет навыки и знания в области машинного обучения',
-    'Не участвует в международных конференциях и хакатонах',
-];
-
-// Положительные и отрицательные данные для обучения модели могут быть использованы для классификации кандидатов на основе их профиля и характеристик.
+const negativeData = [    "не особо знаю React ","хочу деньги","хочу разбоготеть,","не знаю фронт","знаю джанго"];
 
 
+// Train the model
 classifier.train(positiveData, 'хороший кандидат');
 classifier.train(negativeData, 'плохой кандидат');
 
-// Роут для предсказания
+// The rest of the code remains the same...
+
+// Route for prediction
 router.post('/predict', (req, res) => {
     // const { text } = req.body;
-        const prompt = "Меня зовут Мирас, живу в городе Алматы, хочу к вам поступит ведь я хочу помогать Казахстану,просто не знаю чем занятся, работал с React, TypeScript, есть мотивация двигаться вперед!)"
-    // Выводим текст кандидата в консоль сервера для демонстрации
-    console.log('Текст кандидата:', prompt);
+    const text  = "Проходил курс по фронтенд разработке, и базовые курсы по пайтону. Знаю html, css. Js и React на начальном уровне";
 
-    // Предсказываем категорию на основе текста
-    const predictions = classifier.predict(prompt);
+
+    if (!text) {
+        return res.status(400).json({ error: 'Текст не предоставлен' });
+    }
+
+    console.log('Текст кандидата:', text);
+
+    // Make prediction with more parameters
+    const predictions = classifier.predict(text, 3, 0.1);
+
+    console.log('Предсказания:', predictions);
 
     if (predictions.length) {
-        res.json(predictions);
+        // Return more detailed prediction information
+        const detailedPredictions = predictions.map(prediction => ({
+            label: prediction.label,
+            confidence: prediction.confidence,
+            tokens: classifier.tokenize(text)
+        }));
+        res.json(detailedPredictions);
     } else {
         res.json({ message: 'Нет предсказаний' });
     }
+});
+
+// Add a route to get model information
+router.get('/model-info', (req, res) => {
+    const modelInfo = {
+        nGramMin: classifier.model.nGramMin,
+        nGramMax: classifier.model.nGramMax,
+        vocabularySize: classifier.model.vocabulary ? classifier.model.vocabulary.size : 'N/A',
+        labels: Object.keys(classifier.model.data)
+    };
+    res.json(modelInfo);
+});
+
+// Add a route to add new training data
+router.post('/train', (req, res) => {
+    const { text, label } = req.body;
+
+    if (!text || !label) {
+        return res.status(400).json({ error: 'Текст и метка должны быть предоставлены' });
+    }
+
+    classifier.train(text, label);
+    res.json({ message: 'Модель обучена на новых данных' });
 });
 
 export default router;
