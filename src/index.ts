@@ -6,6 +6,7 @@ import readSheet from "./google-sheets/sheets.Utils";
 import {GoogleGenerativeAI} from "@google/generative-ai";
 import geminiApiRoutes from "./routes/GeminiRoute";
 import dotenv from "dotenv";
+import ngramsRouter from './routes/N-grams';
 
 
 const app = express();
@@ -24,6 +25,7 @@ app.use(logger);
 app.use(express.json());
 app.use("/api/v1/", globalRouter);
 app.use("/",geminiApiRoutes)
+app.use('/', ngramsRouter);
 
 app.get("/helloworld", async (request, response) => {
   const rows = await readSheet(sheetId, range);
