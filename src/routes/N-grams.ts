@@ -1,77 +1,202 @@
 import express from 'express';
 import Classifier from 'ml-classify-text';
+import mongoose, { Document, Model } from 'mongoose';
+import cors from 'cors';
 
 const router = express.Router();
 
-// Create a new classifier with more advanced configuration
-const classifier = new Classifier({
-    nGramMin: 1,
-    nGramMax: 3,  // Use unigrams, bigrams, and trigrams
-    vocabulary: [],  // Use an empty array instead of an empty Set
+// MongoDB connection
+const mongoURI = 'mongodb+srv://miraskural:q1w2e3r4@cluster0.dpeedha.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
+
+mongoose.connect(mongoURI, {
+    serverSelectionTimeoutMS: 10000,
+})
+    .then(() => console.log('Connected to MongoDB'))
+    .catch(err => console.error('Error connecting to MongoDB:', err));
+
+// MongoDB schemas and types
+interface ICandidate extends Document {
+    category: string;
+    telegram: string;
+    instagram: string;
+    github: string;
+    education: string;
+    specialization: string;
+    workplace: string;
+    experience: string;
+    projects: string;
+    achievements: string;
+    isValid: boolean;
+    prediction?: string;
+    confidence?: number;
+    status?: string;
+    humanDecision?: string;
+    reasonForDecision?: string;
+}
+
+interface CandidateInput {
+    category: string;
+    telegram: string;
+    instagram: string;
+    github: string;
+    education: string;
+    specialization: string;
+    workplace: string;
+    experience: string;
+    projects: string;
+    achievements: string;
+    isValid: boolean;
+}
+
+interface PredictionResult {
+    label: string;
+    confidence: number;
+}
+
+interface CandidatePrediction {
+    candidate: CandidateInput;
+    prediction: PredictionResult;
+}
+
+const CandidateSchema = new mongoose.Schema<ICandidate>({
+    category: String,
+    telegram: String,
+    instagram: String,
+    github: String,
+    education: String,
+    specialization: String,
+    workplace: String,
+    experience: String,
+    projects: String,
+    achievements: String,
+    isValid: Boolean,
+    prediction: String,
+    confidence: Number,
+    status: String,
+    humanDecision: String,
+    reasonForDecision: String
 });
 
-const positiveData = [    "React","Vue","Я хочу стать сильнее,","хочу помогать стране, знаю фронт"];
+const Candidate: Model<ICandidate> = mongoose.model<ICandidate>('Candidate', CandidateSchema);
 
-const negativeData = [    "не особо знаю React ","хочу деньги","хочу разбоготеть,","не знаю фронт","знаю джанго"];
-
+// Classifier setup
+let classifier = new Classifier({
+    nGramMin: 1,
+    nGramMax: 3,
+    vocabulary: [],
+});
+const positiveData = ["React", "Vue", "Я хочу стать сильнее,", "хочу помогать стране, знаю фронт","Имею хорошие базовые навыки на уровне студента ИТ-университета"];
+const negativeData = ["не особо знаю React ", "хочу деньги", "хочу разбоготеть,", "не знаю фронт", "знаю джанго"];
 
 // Train the model
-classifier.train(positiveData, 'хороший кандидат');
-classifier.train(negativeData, 'плохой кандидат');
+positiveData.forEach(data => classifier.train(data, 'хороший кандидат'));
+negativeData.forEach(data => classifier.train(data, 'плохой кандидат'));
+// Route to process data from /helloworld
+router.post('/process-data', async (req, res) => {
+    const { data } = req.body;
+    let allPredictions: CandidatePrediction[] = [];
 
-// The rest of the code remains the same...
+    // First pass: collect all predictions
+    for (let row of data) {
+        const candidate: CandidateInput = {
+            category: row[0],
+            telegram: row[1],
+            instagram: row[2],
+            github: row[3],
+            education: row[4],
+            specialization: row[5],
+            workplace: row[6],
+            experience: row[7],
+            projects: row[8],
+            achievements: row[9],
+            isValid: row[10] === 'TRUE'
+        };
 
-// Route for prediction
-router.post('/predict', (req, res) => {
-    // const { text } = req.body;
-    const text  = "Проходил курс по фронтенд разработке, и базовые курсы по пайтону. Знаю html, css. Js и React на начальном уровне";
+        const text = `${candidate.category} ${candidate.experience} ${candidate.projects} ${candidate.achievements}`;
+        const predictions = classifier.predict(text, 1, 0.1);
 
-
-    if (!text) {
-        return res.status(400).json({ error: 'Текст не предоставлен' });
+        if (predictions.length) {
+            allPredictions.push({
+                candidate,
+                prediction: predictions[0] as PredictionResult
+            });
+        }
     }
 
-    console.log('Текст кандидата:', text);
+    // Sort predictions by confidence in descending order
+    allPredictions.sort((a, b) => b.prediction.confidence - a.prediction.confidence);
 
-    // Make prediction with more parameters
-    const predictions = classifier.predict(text, 3, 0.1);
+    // Find threshold values
+    const totalCandidates = allPredictions.length;
+    const approvedThreshold = Math.floor(totalCandidates * 0.3);
+    const whitelistThreshold = Math.floor(totalCandidates * 0.7);
 
-    console.log('Предсказания:', predictions);
+    // Second pass: categorize candidates and save to database
+    for (let i = 0; i < allPredictions.length; i++) {
+        const { candidate, prediction } = allPredictions[i];
+        let status: string;
 
-    if (predictions.length) {
-        // Return more detailed prediction information
-        const detailedPredictions = predictions.map(prediction => ({
-            label: prediction.label,
+        if (i < approvedThreshold) {
+            status = 'approved';
+        } else if (i < whitelistThreshold) {
+            status = 'whitelist';
+        } else {
+            status = 'rejected';
+        }
+
+        await Candidate.create({
+            ...candidate,
+            prediction: prediction.label,
             confidence: prediction.confidence,
-            tokens: classifier.tokenize(text)
-        }));
-        res.json(detailedPredictions);
+            status
+        });
+    }
+
+    res.json({ message: 'Predictions completed and saved' });
+});
+
+router.get('/candidates', async (req, res) => {
+    const approved = await Candidate.find({ status: 'approved' });
+    const whitelist = await Candidate.find({ status: 'whitelist' });
+    const rejected = await Candidate.find({ status: 'rejected' });
+
+    res.json({ approved, whitelist, rejected });
+});
+
+// Route to get whitelist candidates
+router.get('/whitelist', async (req, res) => {
+    const candidates = await Candidate.find({ status: 'whiteList' });
+    console.log(`Whitelist candidates: ${JSON.stringify(candidates)}`);
+    res.json(candidates);
+});
+
+
+// Route to update decision and train model
+router.post('/decide', async (req, res) => {
+    const { id, decision, reason } = req.body;
+    const candidate = await Candidate.findByIdAndUpdate(id, {
+        status: decision,
+        humanDecision: decision,
+        reasonForDecision: reason
+    });
+
+    if (candidate) {
+        const text = `${candidate.category} ${candidate.experience} ${candidate.projects} ${candidate.achievements}`;
+        classifier.train(text, decision);
+        res.json({ message: 'Decision saved and model updated' });
     } else {
-        res.json({ message: 'Нет предсказаний' });
+        res.status(404).json({ message: 'Candidate not found' });
     }
 });
 
-// Add a route to get model information
-router.get('/model-info', (req, res) => {
-    const modelInfo = {
-        nGramMin: classifier.model.nGramMin,
-        nGramMax: classifier.model.nGramMax,
-        vocabularySize: classifier.model.vocabulary ? classifier.model.vocabulary.size : 'N/A',
-        labels: Object.keys(classifier.model.data)
-    };
-    res.json(modelInfo);
-});
-
-// Add a route to add new training data
-router.post('/train', (req, res) => {
-    const { text, label } = req.body;
-
-    if (!text || !label) {
-        return res.status(400).json({ error: 'Текст и метка должны быть предоставлены' });
-    }
-
-    classifier.train(text, label);
-    res.json({ message: 'Модель обучена на новых данных' });
+// Route to reset model
+router.post('/reset-model', (req, res) => {
+    classifier = new Classifier({
+        nGramMin: 1,
+        nGramMax: 3,
+        vocabulary: [],
+    });
+    res.json({ message: 'Model reset' });
 });
 
 export default router;
